@@ -1,0 +1,12 @@
+[package]
+name = "possum-world-server"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+tokio = { version = "1.12", features = ["full"] }
+tokio-stream = "0.1"
+tokio-tungstenite = "0.23.1"
+anyhow = "1.0"
+futures-util = "0.3"
+uuid = { version = "1.16.0", features = ["v4"] }
