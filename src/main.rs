@@ -12,7 +12,8 @@ pub struct Client
 {
     x: f32,
     y: f32,
-    raw_bytes: [u8;44]
+    raw_bytes: [u8;44],
+    departed_peer_messages: Vec<Message>
 }
 
 impl Client 
@@ -23,7 +24,8 @@ impl Client
         {
             x:0.0,
             y:0.0,
-            raw_bytes: [0;44]
+            raw_bytes: [0;44],
+            departed_peer_messages: Vec::<Message>::new()
         }
     }
 
@@ -76,6 +78,26 @@ impl Client
     {
         &self.raw_bytes
     }
+
+    pub fn inform_of_departed_peer(&mut self, uuid: &Uuid)
+    {
+        let string_uuid = uuid.to_string();
+        let uuid_bytes = string_uuid.as_bytes(); //36 bytes. NB: copies, $
+
+        if uuid_bytes.len() != 36
+        {
+            println!("A uuid was not 36 bytes long. It was {}",uuid_bytes.len());
+            return; //bail!
+        }
+
+        //A departed peer message is 36 bytes (just a UUID)
+        self.departed_peer_messages.push(Message::Binary(uuid_bytes.to_vec()));
+    }
+
+    pub fn take_departed_peer_messages(&mut self) -> Vec<Message>
+    {
+        std::mem::take(&mut self.departed_peer_messages)
+    }
 }
 
 #[tokio::main]
@@ -102,8 +124,7 @@ async fn handle_connection(stream: tokio::net::TcpStream, peer_db: Arc<Mutex<Has
         let mut db = peer_db.lock().unwrap();
 
         let mut client = Client::new();
-        let new_uuid = uuid.to_string().clone();
-        client.set_uuid(&new_uuid);
+        client.set_uuid(&uuid.to_string()); //NB: copies
 
         db.insert(uuid,client);
     }
@@ -114,23 +135,34 @@ async fn handle_connection(stream: tokio::net::TcpStream, peer_db: Arc<Mutex<Has
     {
         match msg {
             Ok(msg) => {
+
+                if let Message::Close(_) = msg 
+                {
+                    //Connection is closing...
+                    break;
+                }
                 
+                let mut message_queue : Vec<Message> = Vec::<Message>::new(); //TODO: presize?
+                //NB: queue is set below, don't append things to it before this occurs.
+
                 {
                     let mut db = peer_db.lock().unwrap();
                     match db.get_mut(&uuid).as_mut()
                     {
                         Some(entry) => 
                         {
+                            //Update this client in the server
                             entry.update(&msg);
-                            entry.print(&uuid.to_string());
+
+                            //Drain the departed peer messages into the queue
+                            message_queue = entry.take_departed_peer_messages();
                         },
                         None => {}
                     };
                 }
 
-                let mut message_queue : Vec<Message> = Vec::<Message>::new(); //TODO: presize?
-
                 {
+                    //Enqueue an update for each connected peer
                     for (peer_uuid,peer) in peer_db.lock().unwrap().iter()
                     {
                         if peer_uuid == &uuid
@@ -153,12 +185,24 @@ async fn handle_connection(stream: tokio::net::TcpStream, peer_db: Arc<Mutex<Has
         };
     }
 
+    println!("Client disconnected (WebSocket): {}", uuid);
+
+    //Remove this peer from the DB
     {
         let mut db = peer_db.lock().unwrap();
         db.remove(&uuid);
     }
 
-    println!("Client disconnected (WebSocket): {}", uuid);
+    //All the peers in the map need to know this peer left now.
+    //When they next poll, they'll get the update 
+    {
+        for (peer_uuid,peer) in peer_db.lock().unwrap().iter_mut()
+        {
+
+            println!("Informed client {} of departing peer {}", peer_uuid, uuid);
+            peer.inform_of_departed_peer(&uuid);
+        }
+    }
 
     Ok(())
 }
