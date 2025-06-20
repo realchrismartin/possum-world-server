@@ -89,10 +89,12 @@ fn create_inbound_message(uuid: &Uuid, message: &Message) -> Option<Message>
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let addr = "127.0.0.1:8000".to_string();
+    let addr = "0.0.0.0:8000".to_string();
     let listener = TcpListener::bind(&addr).await?;
 
     let peer_db = Arc::new(Mutex::new(HashMap::<Uuid,Client>::new()));
+
+    println!("possum-server is now listening on port 8000");
 
     while let Ok((stream, _)) = listener.accept().await {
         tokio::spawn(handle_connection(stream,peer_db.clone()));
